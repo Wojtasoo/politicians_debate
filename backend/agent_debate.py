@@ -1,4 +1,3 @@
-import streamlit as st
 import os
 from dotenv import load_dotenv
 from typing import Callable, List
@@ -11,41 +10,32 @@ from langchain_openai import ChatOpenAI
 from langsmith import traceable
 
 from convex import ConvexClient
-from typing_extensions import TypedDict
 import requests
 import json
-import datetime
 import chromadb
+import concurrent.futures
 
 
 load_dotenv()
 client = ConvexClient(os.getenv("CONVEX_URL"))
 db=chromadb.Client()
-#db.clear_system_cache()
-db.delete_collection("Data_1")
-db.delete_collection("Data_2")
 collection_1 = db.create_collection(name="Data_1")
 collection_2 = db.create_collection(name="Data_2")
 
-# class ReadAgent(TypedDict):
-#     #ID: str
-#     #status: str
-#     #Date: datetime
-#     topic: str
-#     speaker_1: str
-#     speaker_2: str
-#     system_message: SystemMessage
-#     model: ChatOpenAI
-#     message_history: List[str]
 class ReadAgent:
-    def __init__(self, topic: str, speaker_1: str, speaker_2: str, system_message: SystemMessage, model: ChatOpenAI, message_history: List[str]):
-        self.topic = topic
+    def __init__(self, ID: str, prompt: str, speaker_1: str, speaker_2: str, context: str, topic: str, initiate: str, system_message: SystemMessage, model: ChatOpenAI, message_history: List[str], data_cache: dict):
+        self.ID = ID
+        self.prompt = prompt
         self.speaker_1 = speaker_1
         self.speaker_2 = speaker_2
+        self.context = context
+        self.topic = topic
+        self.initiate = initiate
         self.system_message = system_message
         self.model = model
         self.message_history = message_history
-    
+        self.data_cache = data_cache
+
     def reset(self):
         self.message_history = ["Here is the conversation so far."]
 
@@ -56,72 +46,44 @@ class ReadAgent:
         # Determine which collection to use based on the current speaker
         if speaker_idx % 2 == 0:
             # If speaker index is even, use collection "Data_1"
-            collection_name = "Data_1"
+            relevant_data = self.data_cache["Data_1"]
         else:
             # If speaker index is odd, use collection "Data_2"
-            collection_name = "Data_2"
-        
-        # Generate a query based on current conversation or topic
-        query = f"{self.topic}"
-        
-        # Retrieve relevant data from the chosen ChromaDB collection
-        relevant_data = retrieve_relevant_data(self, query, collection_name)
-        
-        # Combine relevant data into a single content source
+            relevant_data = self.data_cache["Data_2"]
+            
         combined_content = "\n".join(relevant_data)
-        
+
         # Include the combined content in the message
         message = self.model.invoke(
             [
                 self.system_message,
-                HumanMessage(content="\n".join(self.message_history + [combined_content + f"{self.speaker_2}: "])),
+                HumanMessage(content="\n".join(self.message_history + [combined_content])),
             ]
         )
         return message.content
-    
-    # def reset(self):
-    #     self["message_history"] = ["Here is the conversation so far."]
-    
-    # def receive(self, name: str, message: str) -> None:
-    #     self["message_history"].append(f"{name}: {message}")
-    
-    # def send(self, speaker) -> str:
-    #     message = self["model"].invoke(
-    #         [
-    #             self["system_message"],
-    #             HumanMessage(content="\n".join(self["message_history"] + [f"{self[{speaker}]}: "])),
-    #         ]
-    #     )
-    #     return message.content
-    
-def load_data(ID, status, Date, topic, speaker_1, speaker_2, system_message, model, message_history):
+
+def load_data(ID, prompt, speaker_1, speaker_2, system_message):
     return ReadAgent(
         ID=ID,
-        status=status,
-        Date=Date,
-        topic=topic,
+        prompt=prompt,
         speaker_1=speaker_1,
         speaker_2=speaker_2,
-        system_message=system_message,
-        model=model,
-        message_history=message_history,
+        context="",
+        topic="",
+        initiate="",
+        system_message=SystemMessage(content=system_message),
+        model=ChatOpenAI(model="gpt-4o-mini", temperature=0.2),
+        message_history=[],
+        data_cache={
+        "Data_1": [],
+        "Data_2": []
+        }
     )
 
-names = {
-    "Supporter",
-    "Opposer",
-}
-global topic 
-topic="" #= "The current impact of automation and artificial intelligence on employment"
 word_limit = 50  # word limit for task brainstorming
 
-conversation_description = f"""Here is the topic of conversation: {topic}
-The participants are: {', '.join(names)}"""
-
 def generate_topic_and_context(agent: ReadAgent) -> dict:
-    #topic=agent["topic"]
-    # Get the topic from the agent
-    topic = agent.topic
+    prompt = agent.prompt
     
     # Define the prompt for generating the context
     topic_specifier_prompt = [
@@ -134,10 +96,10 @@ def generate_topic_and_context(agent: ReadAgent) -> dict:
             "initial_prompt": "text"
         }"""),
         HumanMessage(
-            content=f"""{topic}
+            content=f"""{prompt}
             
             You are the moderator.
-            1. Please make the topic more specific
+            1. Please make the topic more specific based on the given prompt
             2. Provide short 2-sentence context about the topic.
             3. Based on the topic and context generate two identical search queries about the political views of {agent.speaker_1} and {agent.speaker_2} respectively on the given topic. 
             4. Generate initial prompt for the debate based on the topic of the debate. Speak directly to the {agent.speaker_1} and {agent.speaker_2}.
@@ -155,16 +117,63 @@ def generate_topic_and_context(agent: ReadAgent) -> dict:
         raise ValueError(f"Failed to parse JSON response: {e}, response: {response}")
     
     return response_dict
-    #response = agent.model.invoke(topic_specifier_prompt).content
+
+def check_URL(url, collection_name):
+    
+    collection = db.get_collection(collection_name)
+    # Query the collection to check if any document contains the URL in its metadata.
+    results = collection.get(
+        where={"metadata.source": url}
+    )
+
+    print(results)
+    # Check if any document matches the query
+    if results is not None:
+        return True
+    return False
+
+API_KEYS = [
+    'jina_1732664b08a34983b49d52051d6c71b9V2ra2V59ec8vVL2Vz32bnFh2T4Kp',
+    'jina_508b6dfd03dd4761b8270ec514b769b5Py9dFogV6lP5XvWMw9FGc3MkxkAs',
+    'jina_f88228a368d4411bab039dff868c4f06vauKVTkQfkb-JcpacBYap9ZluF4m',
+    'jina_a6a334ac556641d3b42504bcf0c35d140JKE7nGS-K8kKMtNMId0whJHHpqk',
+    'jina_69cc95f3f6ef4ef7b19b9a1bf26e82feuN3uaw9yf0vWNddiLl4H6wBfSRZp',
+    'jina_1c0850e3d3ed429292b4711168091d3b0o9b-nWoGwacNpKpKrLxJvzzxqZw'
+]
+call_counter = 0
+
+def get_next_key():
+    global call_counter
+    key = API_KEYS[call_counter % len(API_KEYS)]
+    call_counter += 1
+    return key
 
 
-def get_data_discussion(agent: ReadAgent) -> dict:
+def call_jina_api(link, token):
+    headers = {
+        'Accept': 'application/json',
+        'Authorization': f'Bearer {token}'
+    }
+    jina_url = f'https://r.jina.ai/{link}'
+    response = requests.get(jina_url, headers=headers)
+    if response.status_code == 200:
+        response_json = response.json()
+        return response_json.get("data", {}).get("content")  # Extract content field
+    else:
+        print(f"Request failed: {response.status_code}")
+        return None
+
+@traceable
+def get_data_discussion(agent: ReadAgent) -> ReadAgent:
     response_dict = generate_topic_and_context(agent=agent)
     
     # Access the parsed JSON keys correctly
     query_1 = response_dict["serper_query_1"]
     query_2 = response_dict["serper_query_2"]
     queries = [query_1, query_2]
+    agent.topic = response_dict["topic"]
+    agent.context = response_dict["context"]
+    agent.initiate = response_dict["initial_prompt"]
     
     # Modify the output if needed
     url = "https://google.serper.dev/search"
@@ -183,7 +192,7 @@ def get_data_discussion(agent: ReadAgent) -> dict:
         response = requests.post(url, headers=headers, data=payload)
 
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} - {response.text}")
+            print(f"Error: {response.status_code} - {response.text}")
 
         # Parse the JSON response
         search_results = response.json()
@@ -194,77 +203,92 @@ def get_data_discussion(agent: ReadAgent) -> dict:
             link = result.get("link")
             if link and link not in links:  # Ensure uniqueness
                 links.append(link)
-            if len(links) == 5:  # Stop after 5 links
+            if len(links) == 6:
                 break
-
-        headers = {'Accept': 'application/json', 'Authorization': 'Bearer jina_60d6d9ee5b774a548573f4197af013c10mFxfHr5oEiI82i4EWK_ox_O0Z74'}
-
-        # List to store the responses
+        
         responses = []
-
         # Process each link through the Jina API
-        for link in links:
-            jina_url = f'https://r.jina.ai/{link}'
-            response = requests.get(jina_url, headers=headers)
-            if response.status_code == 200:
-                response_json = response.json()
-                content = response_json.get("data", {}).get("content")  # Extract content field
-                if content:
-                    responses.append(content)
-                else:
-                    raise Exception(f"Content not found in response: {response_json}")
-            else:
-                raise Exception(f"Request failed: {response.status_code}")
+        missed_links=0
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future_to_link = {
+                executor.submit(call_jina_api, link, get_next_key()): link for link in links
+            }
+            for future in concurrent.futures.as_completed(future_to_link):
+                link = future_to_link[future]
+                try:
+                    content = future.result()
+                    if content:
+                        responses.append(content)
+                    else:
+                        missed_links += 1
+                except Exception as exc:
+                    print(f"Link {link} generated an exception: {exc}")
+                    missed_links += 1
 
-        for i, link in enumerate(links):
+        for i in range(len(links)-missed_links):
+            link=links[i]
             if j == 0:
-                if check_URL(link, "Data_1"):
-                    continue
-                else:
-                    docs = split_text(responses[i], link)
-                    for doc in docs:
+                #if check_URL(link, "Data_1")==True:
+                #    continue
+                #else:
+                docs = split_text(responses[i], link)
+                print("Docs_1:",docs)
+                a=0
+                for doc in docs:
+                    for doc_dict in doc:
                         collection_1.add(
-                            documents=[doc["page_content"]],
-                            metadatas=[doc["metadata"]],
-                            embeddings=[embedding_function.embed_documents([doc["page_content"]])]
+                            ids=[str(a)],
+                            documents=[doc_dict["page_content"]],
+                            metadatas=[doc_dict["metadata"]],
+                            #embeddings=[embedding_function.embed_documents([doc_dict["page_content"]])]
                         )
+                        a+=1
             else:
-                if check_URL(link, "Data_2"):
-                    continue
-                else:
-                    docs = split_text(responses[i], link)
-                    for doc in docs:
+                #if check_URL(link, "Data_2")==True:
+                #    continue
+                #else:
+                docs = split_text(responses[i], link)
+                print("Docs_2:",docs)
+                a=0
+                for doc in docs:
+                    for doc_dict in doc:
                         collection_2.add(
-                            documents=[doc["page_content"]],
-                            metadatas=[doc["metadata"]],
-                            embeddings=[embedding_function.embed_documents([doc["page_content"]])]
+                            ids=[str(a)],
+                            documents=[doc_dict["page_content"]],
+                            metadatas=[doc_dict["metadata"]],
+                            #embeddings=[embedding_function.embed_documents([doc_dict["page_content"]])]
                         )
+                        a+=1
 
         links.clear()
         responses.clear()
-
-    return response_dict
-
-def retrieve_relevant_data(agent: ReadAgent, query: str, collection_name: str) -> List[str]:
-    # Perform similarity search in the specified ChromaDB collection based on the provided query
-    collection = db.get_collection(collection_name)
     
-    # Retrieve documents from ChromaDB using a similarity search
-    results = collection.query(query_texts=[query], n_results=5)  # Fetch top 5 relevant documents
+    data_cache = retrieve_relevant_data(agent.topic)
+    agent.data_cache= data_cache
 
-    # Debugging: Print the type and content of results to check its format
-    print("Type of results:", type(results))
-    print("Content of results:", results)
+    return agent
+
+def retrieve_relevant_data(topic) -> dict:
+    data_cache = {
+        "Data_1": [],
+        "Data_2": []
+    }
+
+    # Load data from the "Data_1" collection
+    collection_1 = db.get_collection("Data_1")
+    results_1 = collection_1.query(query_texts=[topic], n_results=6)  # Fetch all data or a large number
+    data_cache["Data_1"] = [doc for doc in results_1['documents'][0]]
     
-    # Check if the results are a list and contain the expected structure
-    if isinstance(results, list) and all(isinstance(doc, dict) for doc in results):
-        documents = [doc["page_content"] for doc in results if "page_content" in doc]
-    else:
-        raise ValueError(f"Unexpected results format: {results}")
-
-    return documents
-
+    # Load data from the "Data_2" collection
+    collection_2 = db.get_collection("Data_2")
+    results_2 = collection_2.query(query_texts=[topic], n_results=6)  # Fetch all data or a large number
+    data_cache["Data_2"] = [doc for doc in results_2['documents'][0]]
     
+    print("Data_Cache:",data_cache)
+
+    return data_cache
+
+
 class DialogueSimulator:
     def __init__(
         self,
@@ -315,7 +339,7 @@ def select_next_speaker(step: int, agents: List[ReadAgent]) -> int:
     idx = (step) % len(agents)
     return idx
 
-def generate_system_message(name, description):
+def generate_system_message(name, description, conversation_description):
     return f"""{conversation_description}
     
 Your name is {name}.
@@ -323,7 +347,7 @@ Your name is {name}.
 Your description is as follows: {description}
 Your goal is to persuade your conversation partner of your point of view.
 
-DO look up information from provided database to refute your partner's claims.
+DO look up information from provided data cache to refute your partner's claims.
 DO cite your sources.
 
 DO NOT fabricate fake citations.
@@ -334,157 +358,89 @@ Do not add anything else.
 Stop speaking the moment you finish speaking from your perspective.
 """
 
-def generate_agent_description(name):
+def generate_agent_description(name, description):
     agent_specifier_prompt = [
         SystemMessage(
-            content="You can add detail to the description of the conversation participant."),
+            content="Add detail to the description of the conversation participant."),
         HumanMessage(
-            content=f"""{conversation_description}
-            Please reply with a creative description of {name}, in {word_limit} words or less. 
+            content=f"""{description}
+            Please reply with a description of {name}, in {word_limit} words or less. 
             Speak directly to {name}.
             Give them a point of view.
             Do not add anything else."""
         ),
     ]
-    agent_description = ChatOpenAI(temperature=1.0)(agent_specifier_prompt).content
+    agent_description = ChatOpenAI(model="gpt-4o-mini",temperature=1.0)(agent_specifier_prompt).content
     return agent_description
 
-agent_descriptions = {name: generate_agent_description(name) for name in names}
-for name, description in agent_descriptions.items():
-    print(description)
-
-agent_system_messages = {
-    name: generate_system_message(name, description)
-    for name, description in zip(names, agent_descriptions.values())
-}
-
-# Set the layout of the page to wide mode
-st.set_page_config(layout="wide")
-
-# Title at the top of the page
-st.markdown("""
-    <style>
-    .title-center {
-        text-align: center;
-        font-size: 36px;
-        font-weight: bold;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# Title
-st.markdown('<div class="title-center">AI-Powered Debate</div>', unsafe_allow_html=True)
-
-# Define the layout of the page
-col1, col2, col3 = st.columns([1, 3, 1])
-
-with col1:
-    # Left Select Box
-    left_option = st.selectbox("Select Politician", ["Donald Tusk", "Szymon Hołownia", "Radosław Sikorski", "Włodzimierz Czarzasty", "Sławomir Mentzen"], key="left_selectbox")
-    if left_option=="Donald Tusk":
-        st.image("Tusk.jpeg", caption="Donald Tusk", use_column_width=True)
-    elif left_option=="Szymon Hołownia":
-        st.image("Hołownia.jpeg", caption="Szymon Hołownia", use_column_width=True)
-    elif left_option=="Radosław Sikorski":
-        st.image("Sikorski.webp", caption="Radosław Sikorski", use_column_width=True)
-    elif left_option=="Włodzimierz Czarzasty":
-        st.image("Czarzasty.webp", caption="Włodzimierz Czarzasty", use_column_width=True)
-    elif left_option=="Sławomir Mentzen":
-        st.image("Mentzen.jpg", caption="Sławomir Mentzen", use_column_width=True)
-
-with col3:
-    # Right Select Box
-    right_option = st.selectbox("Select Politician", ["Andrzej Duda", "Mateusz Morawiecki", "Jarosław Kaczyński", "Mariusz Błaszczak", "Grzegorz Braun"], key="right_selectbox")
-    if right_option=="Andrzej Duda":
-        st.image("Duda.jpg", caption="Andrzej Duda", use_column_width=True)
-    elif right_option=="Mateusz Morawiecki":
-        st.image("Morawiecki.jpg", caption="Mateusz Morawiecki", use_column_width=True)
-    elif right_option=="Jarosław Kaczyński":
-        st.image("Kaczor.jpeg", caption="Jarosław Kaczyński", use_column_width=True)
-    elif right_option=="Mariusz Błaszczak":
-        st.image("Błaszczak.jpg", caption="Mariusz Błaszczak", use_column_width=True)
-    elif right_option=="Grzegorz Braun":
-        st.image("Braun.jpeg", caption="Grzegorz Braun", use_column_width=True)
-
-
-with col2:
-    # Chat window below the title and image
-    st.subheader("Chat Window")
+def start_debate(ID, prompt, speaker_1, speaker_2):
+                # Generate agent descriptions and system messages
+                names={ 
+                       speaker_1,
+                       speaker_2
+                }
     
-    # Initialize chat history in session state if it doesn't exist
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+                conversation_description=f"""Here is the topic of conversation: {prompt}
+                The participants are: {', '.join(names)}"""
+            
+                agent_descriptions = {name: generate_agent_description(name, conversation_description) for name in names}
+                for name, description in agent_descriptions.items():
+                    print(description)
 
-    # Input box for user to type messages
-    user_input = st.text_input("Enter topic:", "")
-    
-    # Add a submit button
-    if st.button("Start Debate"):
-        if user_input:
-            # Use user_input as the topic
-            topic = user_input
-            
-            # Clear previous chat history
-            st.session_state.chat_history = []
-            
-            # Generate agent descriptions and system messages (reuse your existing functions)
-            agents = [
-                ReadAgent(
-                    #name=name,
-                    topic=topic,
-                    speaker_1=left_option,
-                    speaker_2=right_option,
-                    system_message=SystemMessage(content=system_message),
-                    model=ChatOpenAI(model="gpt-4o-mini", temperature=0.2),
-                    message_history=[]
-                )
-                for name, system_message in zip(
-                    names, agent_system_messages.values()
-                )
-            ]
-            
-            simulator = DialogueSimulator(agents=agents, selection_function=select_next_speaker)
-            simulator.reset()
-            simulator.inject("Moderator", get_data_discussion(agents[0]))
-            #st.session_state.chat_history.append(f"(Moderator): {specified_topic}")
-            
-            # Simulate conversation
-            for i in range(6):
-                name, message = simulator.step()
-                st.session_state.chat_history.append((name, message))
-            
-            # Display chat history
-            for name, message in st.session_state.chat_history:
-                st.write(f"**{name}:** {message}")
-            
-        else:
-            st.warning("Please enter a topic before starting the debate.")
-
-
+                agent_system_messages = {
+                    name: generate_system_message(name, description, conversation_description=conversation_description)
+                    for name, description in zip(names, agent_descriptions.values())
+                }
+                
+                agents = [
+                    get_data_discussion(load_data(ID=ID, prompt=prompt, speaker_1=speaker_1, speaker_2=speaker_2, system_message=system_message))
+                    for name, system_message in zip(
+                        names, agent_system_messages.values()
+                    )
+                ]
+                
+                simulator = DialogueSimulator(agents=agents, selection_function=select_next_speaker)
+                simulator.reset()
+                simulator.inject("Moderator", agents[0].initiate)
+                print(f"(Moderator): {agents[0].initiate}")
+                
+                message_history = []
+                
+                def add_message(sender: str, content: str):
+                    # Create a message dictionary with sender, receiver, timestamp, and content
+                    message = {
+                        "politician": sender,
+                        "message": content
+                    }
+                    # Append the message to the history
+                    message_history.append(message)
+                    
+                add_message("Moderator", f"{agents[0].initiate}")
+                
+                # Simulate conversation
+                for i in range(6):
+                    name, message = simulator.step()
+                    add_message(name, message)
+                    print(f"{name}: {message}\n")
+                
+                def display_history():
+                    # Iterate over the message history and print each message
+                    for message in message_history:
+                        print(f"{message['politician']}: {message['message']} \n")
+                        
+                print("----------------------Chat History-----------------------------------")
+                display_history()
 
 ############################RAG############################
 
 from dotenv import load_dotenv
 import os
-from langchain_ollama import ChatOllama
 from langchain_ollama import OllamaEmbeddings
 from langchain_openai import ChatOpenAI
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_groq import ChatGroq
 
 load_dotenv()
-
-def get_llm():
-    llm_type = os.getenv("LLM_TYPE", "groq")
-    if llm_type == "ollama":
-        return ChatOllama(model="llama3.1:8b-instruct-q4_0", temperature=0)
-    elif llm_type == "groq":
-        print("Using GROQ")
-        return ChatGroq(temperature=0.1, model_name="llama-3.1-70b-versatile")
-    else:
-        return ChatOpenAI(temperature=0, model="gpt-4o-mini")
 
 def get_embeddings():
     embedding_type = os.getenv("LLM_TYPE", "groq")
@@ -494,97 +450,13 @@ def get_embeddings():
         return OpenAIEmbeddings()
 
 
-from langchain.schema import Document
-
-embedding_function = get_embeddings()
-
-#path_to_file=input("Enter the path to the directory: ")
-#file_name=input("Enter the name of the file: ")
-
-
 def split_text(text, url):
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    all_splits_pypdf = splitter.split_documents(text)
+    all_splits_pypdf = splitter.split_text(text)
     documents = []
     for i, chunk in enumerate(all_splits_pypdf):
         document=[
-                {"page_content": chunk.page_content, "metadata": {"source": f"{url}", "chunk_number": i, "page_number": chunk.metadata.get("page", None)}}
+                {"page_content": chunk, "metadata": {"source": f"{url}", "chunk_number": i}}
         ]
-        # document = Document(
-        #     page_content=chunk.page_content,
-        #     metadata={
-        #         "source": f"{url}",   
-        #         "chunk_number": i,
-        #         "page_number": chunk.metadata.get("page", None)
-        #     }
-        # )
         documents.append(document)
     return documents
-
-def check_URL(url, collection_name):
-    
-    collection = db.get_collection(collection_name)
-    # Query the collection to check if any document contains the URL in its metadata.
-    results = collection.get(
-        where={"metadata.source": url}
-    )
-
-    # Check if any document matches the query
-    if results:
-        return True
-    return False
-
-#retriever = db.as_retriever(search_type="similarity_score_threshold", search_kwargs={'k': 8, 'score_threshold': 0.7})
-
-from typing_extensions import TypedDict
-
-
-class AgentState(TypedDict):
-    prompt: str
-    llm_output: str
-    documents: list[str]
-    classifications: list[str]
-
-def retrieve_docs(state: AgentState):
-    prompt = state["prompt"]
-    print("Prompt: "+prompt)
-    #documents = retriever.invoke(input=prompt)
-    #print("RETRIEVED DOCUMENTS:", documents)
-    #state["documents"] = [doc.page_content for doc in documents]
-    return state
-
-from langchain_core.pydantic_v1 import BaseModel, Field
-from langchain_core.prompts import ChatPromptTemplate
-
-
-def prompt_classifier(state: AgentState):
-    system="""You are a grader assesing the type of information in a paper. \n
-    <instructions>
-    Asses if the information you just read is a technical information or a scientific one.
-    </instructions>
-    
-    <Examples>
-    Technical Information -> Methods used, procedures, specifications of some machines, devices, etc.
-    Scientific Information -> Theoretical concepts, scenarios and mathematical models, graphs and experiments with conclusions etc.
-    </Examples>
-    
-    If the data falls within the technical information category, respond with "The provided piece of information is technical".
-    If the data falls within the scientific information category, respond with "The provided piece of information is scientific".
-    """
-    
-    classification_prompt = ChatPromptTemplate.from_messages([
-        ("system", system),
-        ("human", "{document}")
-    ])
-
-    llm = get_llm()
-    classifications = []
-    for doc in state["documents"]:
-        chain = classification_prompt | llm | StrOutputParser()
-        result = chain.invoke({"document": doc})
-        classifications.append(result)
-
-    state["classifications"] = classifications
-    return state
-
-from langchain_core.output_parsers import StrOutputParser
