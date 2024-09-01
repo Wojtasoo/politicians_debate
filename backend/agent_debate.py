@@ -42,14 +42,14 @@ class ReadAgent:
     def receive(self, name: str, message: str) -> None:
         self.message_history.append(f"{name}: {message}")
 
-    def send(self, speaker_idx: int) -> str:
+    def send(self, step_: int) -> str:
         # Determine which collection to use based on the current speaker
-        if speaker_idx % 2 == 0:
-            # If speaker index is even, use collection "Data_1"
-            relevant_data = self.data_cache["Data_1"]
-        else:
-            # If speaker index is odd, use collection "Data_2"
+        if step_ % 2 == 0:
+            # If speaker index is even, use collection "Data_2"
             relevant_data = self.data_cache["Data_2"]
+        else:
+            # If speaker index is odd, use collection "Data_1"
+            relevant_data = self.data_cache["Data_1"]
             
         combined_content = "\n".join(relevant_data)
 
@@ -102,7 +102,7 @@ def generate_topic_and_context(agent: ReadAgent) -> dict:
             1. Please make the topic more specific based on the given prompt
             2. Provide short 2-sentence context about the topic.
             3. Based on the topic and context generate two identical search queries about the political views of {agent.speaker_1} and {agent.speaker_2} respectively on the given topic. 
-            4. Generate initial prompt for the debate based on the topic of the debate. Speak directly to the {agent.speaker_1} and {agent.speaker_2}.
+            4. Generate initial prompt for the debate based on the topic of the debate. Speak directly to the {agent.speaker_1} and {agent.speaker_2}. Ask {agent.speaker_1} to proceed with the question first.
             Do not add anything else."""
         )
     ]
@@ -319,15 +319,16 @@ class DialogueSimulator:
         speaker = self.agents[speaker_idx]
 
         # 2. next speaker sends message
-        message = speaker.send(speaker_idx)
+        message = speaker.send(self._step)
 
         # 3. everyone receives the message
         # Check if the message is from speaker_1 or speaker_2
         for receiver in self.agents:
-            if speaker_idx % 2 == 0:
-                sender = speaker.speaker_1
-            else:
+            if self._step % 2 == 0:
                 sender = speaker.speaker_2
+            else:
+                sender = speaker.speaker_1
+            #print(f"Sender: {sender} Message: {message}")
             receiver.receive(sender, message)
 
         # 4. increment time
@@ -407,7 +408,7 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
             system_message=system_message,
             model=ChatOpenAI(model="gpt-4o-mini", temperature=0.2),
             message_history=[],
-            data_cache=shared_agent.data_cache  # Share the data cache
+            data_cache=shared_agent.data_cache
         )
         for name, system_message in zip(names, agent_system_messages.values())
     ]
