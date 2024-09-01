@@ -108,7 +108,7 @@ def generate_topic_and_context(agent: ReadAgent) -> dict:
     ]
     
     # Get the response from the model
-    response = ChatOpenAI(temperature=1.0)(topic_specifier_prompt).content
+    response = ChatOpenAI(model="gpt-4o-mini", temperature=1.0)(topic_specifier_prompt).content
     
     # Parse the JSON string response into a dictionary
     try:
@@ -374,80 +374,82 @@ def generate_agent_description(name, description):
     return agent_description
 
 def start_debate(ID, prompt, speaker_1, speaker_2):
-                # Generate agent descriptions and system messages
-                names={ 
-                       speaker_1,
-                       speaker_2
-                }
-    
-                conversation_description=f"""Here is the topic of conversation: {prompt}
-                The participants are: {', '.join(names)}"""
-            
-                agent_descriptions = {name: generate_agent_description(name, conversation_description) for name in names}
-                for name, description in agent_descriptions.items():
-                    print(description)
+    # Generate agent descriptions and system messages
+    names={ 
+            speaker_1,
+            speaker_2
+    }
 
-                agent_system_messages = {
-                    name: generate_system_message(name, description, conversation_description=conversation_description)
-                    for name, description in zip(names, agent_descriptions.values())
-                }
-                
-                agents = [
-                    get_data_discussion(load_data(ID=ID, prompt=prompt, speaker_1=speaker_1, speaker_2=speaker_2, system_message=system_message))
-                    for name, system_message in zip(
-                        names, agent_system_messages.values()
-                    )
-                ]
-                
-                simulator = DialogueSimulator(agents=agents, selection_function=select_next_speaker)
-                simulator.reset()
-                simulator.inject("Moderator", agents[0].initiate)
-                print(f"(Moderator): {agents[0].initiate}")
-                
-                message_history = []
-                
-                def add_message(sender: str, content: str):
-                    # Create a message dictionary with sender, receiver, timestamp, and content
-                    message = {
-                        "politician": sender,
-                        "message": content
-                    }
-                    # Append the message to the history
-                    message_history.append(message)
-                    
-                add_message("Moderator", f"{agents[0].initiate}")
-                
-                # Simulate conversation
-                for i in range(6):
-                    name, message = simulator.step()
-                    add_message(name, message)
-                    print(f"{name}: {message}\n")
-                
-                def display_history():
-                    # Iterate over the message history and print each message
-                    for message in message_history:
-                        print(f"{message['politician']}: {message['message']} \n")
-                        
-                print("----------------------Chat History-----------------------------------")
-                display_history()
+    conversation_description=f"""Here is the topic of conversation: {prompt}
+    The participants are: {', '.join(names)}"""
+
+    agent_descriptions = {name: generate_agent_description(name, conversation_description) for name in names}
+    for name, description in agent_descriptions.items():
+        print(description)
+
+    agent_system_messages = {
+        name: generate_system_message(name, description, conversation_description=conversation_description)
+        for name, description in zip(names, agent_descriptions.values())
+    }
+    
+    shared_agent = get_data_discussion(load_data(ID=ID, prompt=prompt, speaker_1=speaker_1, speaker_2=speaker_2, system_message=list(agent_system_messages.values())[0]))
+
+    # Use the shared data cache to create agents
+    agents = [
+        ReadAgent(
+            ID=ID,
+            prompt=prompt,
+            speaker_1=speaker_1,
+            speaker_2=speaker_2,
+            context=shared_agent.context,
+            topic=shared_agent.topic,
+            initiate=shared_agent.initiate,
+            system_message=system_message,
+            model=ChatOpenAI(model="gpt-4o-mini", temperature=0.2),
+            message_history=[],
+            data_cache=shared_agent.data_cache  # Share the data cache
+        )
+        for name, system_message in zip(names, agent_system_messages.values())
+    ]
+    
+    simulator = DialogueSimulator(agents=agents, selection_function=select_next_speaker)
+    simulator.reset()
+    simulator.inject("Moderator", agents[0].initiate)
+    print(f"(Moderator): {agents[0].initiate}")
+    
+    message_history = []
+    
+    def add_message(sender: str, content: str):
+        # Create a message dictionary with sender, receiver, timestamp, and content
+        message = {
+            "politician": sender,
+            "message": content
+        }
+        # Append the message to the history
+        message_history.append(message)
+        
+    add_message("Moderator", f"{agents[0].initiate}")
+    
+    # Simulate conversation
+    for i in range(6):
+        name, message = simulator.step()
+        add_message(name, message)
+        print(f"{name}: {message}\n")
+    
+    def display_history():
+        # Iterate over the message history and print each message
+        for message in message_history:
+            print(f"{message['politician']}: {message['message']} \n")
+            
+    print("----------------------Chat History-----------------------------------")
+    display_history()
 
 ############################RAG############################
 
 from dotenv import load_dotenv
 import os
-from langchain_ollama import OllamaEmbeddings
 from langchain_openai import ChatOpenAI
-from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-load_dotenv()
-
-def get_embeddings():
-    embedding_type = os.getenv("LLM_TYPE", "groq")
-    if embedding_type == "ollama":
-        return OllamaEmbeddings(model="llama3.1:8b-instruct-q4_0")
-    else:
-        return OpenAIEmbeddings()
 
 
 def split_text(text, url):
