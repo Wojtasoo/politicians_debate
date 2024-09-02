@@ -35,7 +35,7 @@ class ReadAgent:
         self.data_cache = data_cache
 
     def reset(self):
-        self.message_history = ["Here is the conversation so far."]
+        self.message_history = ["Here is the conversation so far <Conversation history>:"]
 
     def receive(self, name: str, message: str) -> None:
         self.message_history.append(f"{name}: {message}")
@@ -368,16 +368,33 @@ def select_next_speaker(step: int, agents: List[ReadAgent]) -> int:
     # step 1 -> speaker 2 (index 1), and so on
     return step % len(agents)
 
-def generate_system_message(name, description, conversation_description, agent: ReadAgent) -> str:
+def generate_system_message(name, agent_description, conversation_description, agent: ReadAgent) -> str:
     if name == agent.speaker_1:
-        return f"""{conversation_description}
-        
-            1. Your name is {name}. Embody this persona for the duration of the conversation. Speak from the perspective of {name}.
+        collected_data = agent.data_cache["Data_1"]
+    else:
+        collected_data = agent.data_cache["Data_2"]
 
-            2. Your description is as follows: {description}
+    return f"""{conversation_description}
+    
+        You are a speaker in the debate as follows: {agent_description}. 
+
+        <context_data>
+        {collected_data} 
+        </context_data>
+
+        <goal_of_the_task>
+            Prepare response for yourself in the debate topic of {agent.topic}. Based on this briefing you will respond to your opponent by carefully analysing the <conversation_history>. Defend your stance to convince the listeners to your point of view. be very thorough in analysing the <context_data> provided here so you have your strong opinion and stand for the debate. Criticisize the opponents ideas promoting your stance.
+
+            your response should not exceed 150 words.
+        </goal_of_the_task>
+
+        <steps to execute the task>
+
+            1. Your name is {name}. Embody this persona for the duration of the conversation. Speak from the first person perspective as {name}.
+
             3. Your goal is to overthrow point of view of your oppoent.
 
-            4. DO look up information from {agent.data_cache["Data_1"]} to support your claims and refute your opponent's.
+            4. DO look up information from <context_data> to support your claims and refute your opponent's.
             5. DO cite your sources.
             6. Speak shortly and concisely, no more than 3 sentences. 
             
@@ -386,65 +403,39 @@ def generate_system_message(name, description, conversation_description, agent: 
             9. Avoid repeating the same information.
             10. If you have already mentioned a source, do not mention it again.
 
-            12. If you don't find any other relevant information in {agent.data_cache["Data_1"]} to support your arguments on the topic than those arleady said, inform that you don't have anything more to add.
-            
-            Do not add anything else.
-
-            Stop speaking the moment you finish speaking from your perspective.
-            """
-    else:
-        return f"""{conversation_description}
+            12. If you don't find any other relevant information in <context_data> to support your arguments on the topic than those arleady said, inform that you don't have anything more to add.
+        </steps_to_execute_the_task>
         
-            1. Your name is {name}. Embody this persona for the duration of the conversation. Speak from the perspective of {name}.
+        Do not add anything else.
 
-            2. Your description is as follows: {description}
-            3. Your goal is to overthrow point of view of your opponent.
+        Stop speaking the moment you finish speaking from your perspective.
+        """
 
-            4. DO look up information from {agent.data_cache["Data_2"]} to support your claims and refute your opponent's.
-            5. DO cite your sources.
-            6. Speak shortly and concisely, no more than 3 sentences. 
-            
-            7. DO NOT fabricate fake citations.
-            8. DO NOT cite any source that you did not look up.
-            9. Avoid repeating the same information.
-            10. If you have already mentioned a source, do not mention it again.
-
-            11. If you don't find any other relevant information in {agent.data_cache["Data_2"]} to support your arguments on the topic than those arleady said, inform that you don't have anything more to add.
-            
-            12. Do not add anything else.
-
-            Stop speaking the moment you finish speaking from your perspective.
-            """
-
-def generate_agent_description(name, description, agent: ReadAgent) -> str:
+def generate_agent_description(name, conversation_description, agent: ReadAgent) -> str:
+    
     if name==agent.speaker_1:
-        agent_specifier_prompt = [
-            SystemMessage(
-                content="Add detail description of the conversation participant."),
-            HumanMessage(
-                content=f"""{description}
-                Please provide a description of {name}, in {word_limit} words or less.
-                {name}, you have to speak shortly and concisely, no more than 3 sentences. 
-                Speak directly to {name}.
-                Give them a point of view regarding the topic: {agent.topic} using following data: {agent.data_cache["Data_1"]}.
-                
-                Do not add anything else."""
-            ),
-        ]
+        collected_data = agent.data_cache["Data_1"]
     else:
+        collected_data = agent.data_cache["Data_2"]
+    
         agent_specifier_prompt = [
             SystemMessage(
-                content="Add detail description of the conversation participant."),
+                content=f"Add detail description of the conversation participant (speaker) named {name} indicating the opinions and stance of the speaker for the debate topic."),
             HumanMessage(
-                content=f"""{description}
+                content=f"""{conversation_description}
                 Please provide a description of {name}, in {word_limit} words or less.
-                {name}, you have to speak shortly and concisely, no more than 3 sentences. 
-                Speak directly to {name}.
-                Give them a point of view regarding the topic: {agent.topic} using following data: {agent.data_cache["Data_2"]}.
+                The description must be concise, no more than 3 sentences. 
+                Description must contain point of view regarding the topic: {agent.topic} using following input data: 
+                <input_data>
+                {collected_data}.
+                </input_data>
+                
+                Analyse the input data very thorough in order to summarise your stance on the debate topic of the speaker.
                 
                 Do not add anything else."""
             ),
         ]
+    
     agent_description = ChatOpenAI(model="gpt-4o-mini",temperature=0.5)(agent_specifier_prompt).content
     return agent_description
 
@@ -468,8 +459,8 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
         print(description)
 
     agent_system_messages = {
-        name: generate_system_message(name, description, conversation_description=conversation_description)
-        for name, description in zip(names, agent_descriptions.values())
+        name: generate_system_message(name, agent_description, conversation_description=conversation_description, agent=shared_agent)
+        for name, agent_description in zip(names, agent_descriptions.values())
     }
 
     # Use the shared data cache to create agents
