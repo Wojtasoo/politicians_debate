@@ -149,7 +149,7 @@ def check_URL(url, collection_name):
 
     print(results)
     # Check if any document matches the query
-    if results is not None:
+    if len(results["documents"]) > 0:
         return True
     return False
 
@@ -344,7 +344,7 @@ class DialogueSimulator:
 
         # 3. Everyone receives the message
         for receiver in self.agents:
-            if speaker_idx == 0:
+            if self._step % 2 == 0:
                 sender = speaker.speaker_1
                 politician = "politician1"
             else:
@@ -368,37 +368,83 @@ def select_next_speaker(step: int, agents: List[ReadAgent]) -> int:
     # step 1 -> speaker 2 (index 1), and so on
     return step % len(agents)
 
-def generate_system_message(name, description, conversation_description):
-    return f"""{conversation_description}
-    
-        Your name is {name}.
+def generate_system_message(name, description, conversation_description, agent: ReadAgent) -> str:
+    if name == agent.speaker_1:
+        return f"""{conversation_description}
+        
+            1. Your name is {name}. Embody this persona for the duration of the conversation. Speak from the perspective of {name}.
 
-        Your description is as follows: {description}
-        Your goal is to persuade your conversation partner of your point of view.
+            2. Your description is as follows: {description}
+            3. Your goal is to overthrow point of view of your oppoent.
 
-        DO look up information from provided data context to refute your partner's claims.
-        DO cite your sources.
+            4. DO look up information from {agent.data_cache["Data_1"]} to support your claims and refute your opponent's.
+            5. DO cite your sources.
+            6. Speak shortly and concisely, no more than 3 sentences. 
+            
+            7. DO NOT fabricate fake citations.
+            8. DO NOT cite any source that you did not look up.
+            9. Avoid repeating the same information.
+            10. If you have already mentioned a source, do not mention it again.
 
-        DO NOT fabricate fake citations.
-        DO NOT cite any source that you did not look up.
+            12. If you don't find any other relevant information in {agent.data_cache["Data_1"]} to support your arguments on the topic than those arleady said, inform that you don't have anything more to add.
+            
+            Do not add anything else.
 
-        Do not add anything else.
+            Stop speaking the moment you finish speaking from your perspective.
+            """
+    else:
+        return f"""{conversation_description}
+        
+            1. Your name is {name}. Embody this persona for the duration of the conversation. Speak from the perspective of {name}.
 
-        Stop speaking the moment you finish speaking from your perspective.
-        """
+            2. Your description is as follows: {description}
+            3. Your goal is to overthrow point of view of your opponent.
 
-def generate_agent_description(name, description):
-    agent_specifier_prompt = [
-        SystemMessage(
-            content="Add detail to the description of the conversation participant."),
-        HumanMessage(
-            content=f"""{description}
-            Please reply with a description of {name}, in {word_limit} words or less. 
-            Speak directly to {name}.
-            Give them a point of view.
-            Do not add anything else."""
-        ),
-    ]
+            4. DO look up information from {agent.data_cache["Data_2"]} to support your claims and refute your opponent's.
+            5. DO cite your sources.
+            6. Speak shortly and concisely, no more than 3 sentences. 
+            
+            7. DO NOT fabricate fake citations.
+            8. DO NOT cite any source that you did not look up.
+            9. Avoid repeating the same information.
+            10. If you have already mentioned a source, do not mention it again.
+
+            11. If you don't find any other relevant information in {agent.data_cache["Data_2"]} to support your arguments on the topic than those arleady said, inform that you don't have anything more to add.
+            
+            12. Do not add anything else.
+
+            Stop speaking the moment you finish speaking from your perspective.
+            """
+
+def generate_agent_description(name, description, agent: ReadAgent) -> str:
+    if name==agent.speaker_1:
+        agent_specifier_prompt = [
+            SystemMessage(
+                content="Add detail description of the conversation participant."),
+            HumanMessage(
+                content=f"""{description}
+                Please provide a description of {name}, in {word_limit} words or less.
+                {name}, you have to speak shortly and concisely, no more than 3 sentences. 
+                Speak directly to {name}.
+                Give them a point of view regarding the topic: {agent.topic} using following data: {agent.data_cache["Data_1"]}.
+                
+                Do not add anything else."""
+            ),
+        ]
+    else:
+        agent_specifier_prompt = [
+            SystemMessage(
+                content="Add detail description of the conversation participant."),
+            HumanMessage(
+                content=f"""{description}
+                Please provide a description of {name}, in {word_limit} words or less.
+                {name}, you have to speak shortly and concisely, no more than 3 sentences. 
+                Speak directly to {name}.
+                Give them a point of view regarding the topic: {agent.topic} using following data: {agent.data_cache["Data_2"]}.
+                
+                Do not add anything else."""
+            ),
+        ]
     agent_description = ChatOpenAI(model="gpt-4o-mini",temperature=0.5)(agent_specifier_prompt).content
     return agent_description
 
@@ -408,9 +454,15 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
 
     conversation_description = f"""Here is the topic of conversation: {prompt}
     The participants are: {', '.join(names)}"""
+    
+    shared_agent = get_data_discussion(
+        load_data(
+            ID=ID, prompt=prompt, speaker_1=speaker_1, speaker_2=speaker_2, system_message=[]
+        )
+    )
 
     agent_descriptions = {
-        name: generate_agent_description(name, conversation_description) for name in names
+        name: generate_agent_description(name, conversation_description, agent=shared_agent) for name in names
     }
     for name, description in agent_descriptions.items():
         print(description)
@@ -420,13 +472,8 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
         for name, description in zip(names, agent_descriptions.values())
     }
 
-    shared_agent = get_data_discussion(
-        load_data(
-            ID=ID, prompt=prompt, speaker_1=speaker_1, speaker_2=speaker_2, system_message=list(agent_system_messages.values())[0]
-        )
-    )
-
     # Use the shared data cache to create agents
+    message=list(agent_system_messages.values())[0]
     agents = [
         ReadAgent(
             ID=ID,
@@ -436,12 +483,12 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
             context=shared_agent.context,
             topic=shared_agent.topic,
             initiate=shared_agent.initiate,
-            system_message=system_message,
+            system_message=message,
             model=ChatOpenAI(model="gpt-4o-mini", temperature=0.2),
             message_history=[],
-            data_cache=shared_agent.data_cache,
+            data_cache=shared_agent.data_cache
         )
-        for name, system_message in zip(names, agent_system_messages.values())
+        for name, message in zip(names, agent_system_messages.values())
     ]
 
     simulator = DialogueSimulator(agents=agents, selection_function=select_next_speaker)
@@ -462,7 +509,7 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
     for i in range(6):
         name, message = simulator.step()
         add_message(name, message)
-        print(f"{name}: {message}\n")
+        #print(f"{name}: {message}\n")
     
     def display_history():
         for message in message_history:
@@ -471,7 +518,7 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
     print("----------------------Chat History-----------------------------------")
     display_history()
 
-############################RAG############################
+############################RAG#############################
 
 from dotenv import load_dotenv
 import os
