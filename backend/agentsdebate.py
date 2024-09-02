@@ -44,10 +44,10 @@ class ReadAgent:
         # Determine which collection to use based on the current speaker
         if step_ % 2 == 0:
             # If speaker index is even, use collection "Data_2"
-            relevant_data = self.data_cache["Data_2"]
+            relevant_data = self.data_cache["Data_1"]
         else:
             # If speaker index is odd, use collection "Data_1"
-            relevant_data = self.data_cache["Data_1"]
+            relevant_data = self.data_cache["Data_2"]
             
         combined_content = "\n".join(relevant_data)
 
@@ -122,7 +122,7 @@ def generate_topic_and_context(agent: ReadAgent) -> dict:
             You are the moderator.
             1. Please make the topic more specific based on the given prompt
             2. Provide short 2-sentence context about the topic.
-            3. Based on the topic and context generate two identical search queries about the political views of {agent.speaker_1} and {agent.speaker_2} respectively on the given topic. 
+            3. Based on the topic and context generate two identical search queries about the political views of {agent.speaker_1} for serper_query_1 and {agent.speaker_2} for serper_query_2 respectively on the given topic.
             4. As a moderator of the debate generate initial introduction for the debate based on the topic of the debate. Speak directly to the {agent.speaker_1} and {agent.speaker_2}. Ask {agent.speaker_1} to proceed with the question first.
             Do not add anything else."""
         )
@@ -332,7 +332,8 @@ class DialogueSimulator:
         # Introduce the discussion with no step increment
         for agent in self.agents:
             agent.receive(name, message)
-        print(f"({name}): {message}\n")
+        self._step += 1
+        #print(f"({name}): {message}\n")
 
     def step(self) -> tuple[str, str]:
         # 1. Choose the next speaker based on current step
@@ -345,11 +346,11 @@ class DialogueSimulator:
         # 3. Everyone receives the message
         for receiver in self.agents:
             if self._step % 2 == 0:
-                sender = speaker.speaker_1
-                politician = "politician1"
-            else:
                 sender = speaker.speaker_2
                 politician = "politician2"
+            else:
+                sender = speaker.speaker_1
+                politician = "politician1"
             receiver.receive(sender, message)
 
         success, result = update_debate_data(speaker.ID, politician, message)
@@ -357,7 +358,7 @@ class DialogueSimulator:
             print(f"Failed to update debate: {result}")
 
         # 4. Increment the step only if the debate was updated successfully
-        if success:
+        #if success:
             self._step += 1
 
         return sender, message
@@ -385,25 +386,24 @@ def generate_system_message(name, agent_description, conversation_description, a
         <goal_of_the_task>
             Prepare response for yourself in the debate topic of {agent.topic}. Based on this briefing you will respond to your opponent by carefully analysing the <conversation_history>. Defend your stance to convince the listeners to your point of view. be very thorough in analysing the <context_data> provided here so you have your strong opinion and stand for the debate. Criticisize the opponents ideas promoting your stance.
 
-            your response should not exceed 150 words.
+            Your response should not exceed 150 words.
         </goal_of_the_task>
 
         <steps to execute the task>
 
-            1. Your name is {name}. Embody this persona for the duration of the conversation. Speak from the first person perspective as {name}.
+            1. Your name is {name}. Speak from the first person perspective as {name}.
 
-            3. Your goal is to overthrow point of view of your oppoent.
+            2. Your goal is to overthrow point of view of your oppoent.
 
-            4. DO look up information from <context_data> to support your claims and refute your opponent's.
-            5. DO cite your sources.
-            6. Speak shortly and concisely, no more than 3 sentences. 
+            3. DO look up information from <context_data> to support your claims and refute your opponent's.
+            4. DO cite your sources.
+            5. Speak shortly and concisely, no more than 3 sentences. 
             
-            7. DO NOT fabricate fake citations.
-            8. DO NOT cite any source that you did not look up.
-            9. Avoid repeating the same information.
-            10. If you have already mentioned a source, do not mention it again.
-
-            12. If you don't find any other relevant information in <context_data> to support your arguments on the topic than those arleady said, inform that you don't have anything more to add.
+            6. DO NOT fabricate fake citations.
+            7. DO NOT cite any source that you did not look up.
+            8. DO NOT provide "Conclusions", or summaries of any kind at the end of your response.
+            9. Avoid repeating the same information, if you have already mentioned this argument in: <Conversation history>, do not bring it up again. If you can't find any more relevant information in <context_data> to support your arguments on the topic than those arleady said, inform your opponent that you don't have anything more to add on the subject.
+            
         </steps_to_execute_the_task>
         
         Do not add anything else.
@@ -418,23 +418,23 @@ def generate_agent_description(name, conversation_description, agent: ReadAgent)
     else:
         collected_data = agent.data_cache["Data_2"]
     
-        agent_specifier_prompt = [
-            SystemMessage(
-                content=f"Add detail description of the conversation participant (speaker) named {name} indicating the opinions and stance of the speaker for the debate topic."),
-            HumanMessage(
-                content=f"""{conversation_description}
-                Please provide a description of {name}, in {word_limit} words or less.
-                The description must be concise, no more than 3 sentences. 
-                Description must contain point of view regarding the topic: {agent.topic} using following input data: 
-                <input_data>
-                {collected_data}.
-                </input_data>
-                
-                Analyse the input data very thorough in order to summarise your stance on the debate topic of the speaker.
-                
-                Do not add anything else."""
-            ),
-        ]
+    agent_specifier_prompt = [
+        SystemMessage(
+            content=f"Add detail description of the conversation participant (speaker) named {name} indicating the opinions and stance of the speaker for the debate topic."),
+        HumanMessage(
+            content=f"""{conversation_description}
+            Please provide a description of {name}, in {word_limit} words or less.
+            The description must be concise, no more than 3 sentences. 
+            Description must contain point of view regarding the topic: {agent.topic} using following input data: 
+            <input_data>
+            {collected_data}.
+            </input_data>
+            
+            Analyse the input data very thorough in order to summarise your stance on the debate topic of the speaker.
+            
+            Do not add anything else."""
+        ),
+    ]
     
     agent_description = ChatOpenAI(model="gpt-4o-mini",temperature=0.5)(agent_specifier_prompt).content
     return agent_description
