@@ -40,13 +40,11 @@ class ReadAgent:
     def receive(self, name: str, message: str) -> None:
         self.message_history.append(f"{name}: {message}")
 
-    def send(self, step_: int) -> str:
+    def send(self, name: str) -> str:
         # Determine which collection to use based on the current speaker
-        if step_ % 2 == 0:
-            # If speaker index is even, use collection "Data_2"
+        if self.speaker_1 == name:
             relevant_data = self.data_cache["Data_1"]
         else:
-            # If speaker index is odd, use collection "Data_1"
             relevant_data = self.data_cache["Data_2"]
             
         combined_content = "\n".join(relevant_data)
@@ -137,6 +135,7 @@ def generate_topic_and_context(agent: ReadAgent) -> dict:
     except json.JSONDecodeError as e:
         raise ValueError(f"Failed to parse JSON response: {e}, response: {response}")
     
+    print("Response Dict:",response_dict)
     return response_dict
 
 def check_URL(url, collection_name):
@@ -335,22 +334,21 @@ class DialogueSimulator:
         self._step += 1
         #print(f"({name}): {message}\n")
 
-    def step(self) -> tuple[str, str]:
+    def step(self, name) -> tuple[str, str]:
         # 1. Choose the next speaker based on current step
         speaker_idx = self.select_next_speaker(self._step, self.agents)
         speaker = self.agents[speaker_idx]
         
         # 2. Next speaker sends message
-        message = speaker.send(self._step)
+        message = speaker.send(name)
 
         # 3. Everyone receives the message
         for receiver in self.agents:
-            if self._step % 2 == 0:
-                sender = speaker.speaker_2
-                politician = "politician2"
-            else:
-                sender = speaker.speaker_1
+            sender = name
+            if self.agents[0].speaker_1 == name:
                 politician = "politician1"
+            else:
+                politician = "politician2"
             receiver.receive(sender, message)
 
         success, result = update_debate_data(speaker.ID, politician, message)
@@ -397,7 +395,7 @@ def generate_system_message(name, agent_description, conversation_description, a
 
             3. DO look up information from <context_data> to support your claims and refute your opponent's.
             4. DO cite your sources.
-            5. Speak shortly and concisely, no more than 3 sentences. 
+            5. Speak shortly and concisely, no more than 3 sentences. Refer to your opponent by their name.
             
             6. DO NOT fabricate fake citations.
             7. DO NOT cite any source that you did not look up.
@@ -497,10 +495,15 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
     add_message("Moderator", f"{agents[0].initiate}")
     
     # Simulate conversation
-    for i in range(6):
-        name, message = simulator.step()
-        add_message(name, message)
-        #print(f"{name}: {message}\n")
+    counter=1
+    while counter<=6:
+        if counter%2==0:
+            name=agents[0].speaker_2
+        else:
+            name=agents[0].speaker_1
+        sender, message = simulator.step(name)
+        add_message(sender, message)
+        counter+=1
     
     def display_history():
         for message in message_history:
