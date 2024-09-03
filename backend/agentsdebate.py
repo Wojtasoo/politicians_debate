@@ -1,4 +1,3 @@
-import os
 from dotenv import load_dotenv
 from typing import Callable, List
 
@@ -121,7 +120,7 @@ def generate_topic_and_context(agent: ReadAgent) -> dict:
             1. Please make the topic more specific based on the given prompt
             2. Provide short 2-sentence context about the topic.
             3. Based on the topic and context generate two identical search queries about the political views of {agent.speaker_1} for serper_query_1 and {agent.speaker_2} for serper_query_2 respectively on the given topic.
-            4. As a moderator of the debate generate initial introduction for the debate based on the topic of the debate. Speak directly to the {agent.speaker_1} and {agent.speaker_2}. Ask {agent.speaker_1} to proceed with the question first.
+            4. As a moderator of the debate generate initial introduction for the debate based on the topic of the debate. Speak directly to the {agent.speaker_1} and {agent.speaker_2}.
             Do not add anything else."""
         )
     ]
@@ -502,7 +501,13 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
         else:
             name=agents[0].speaker_1
         sender, message = simulator.step(name)
-        add_message(sender, message)
+        if name.split()[0] in message:
+            if name==agents[0].speaker_1:
+                add_message(agents[0].speaker_2, message)
+            else:
+                add_message(agents[0].speaker_1, message)
+        else:
+                add_message(sender, message)
         counter+=1
     
     def display_history():
@@ -515,7 +520,6 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
 ############################RAG#############################
 
 from dotenv import load_dotenv
-import os
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
