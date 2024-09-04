@@ -68,6 +68,8 @@ def update_debate_data(debate_id, speaker, message):
             }
         }
         
+        #print("Payload:",payload)
+        
         # Make POST request to Convex update function
         response = requests.post(UPDATE_DEBATE_ENDPOINT, json=payload)
 
@@ -134,7 +136,6 @@ def generate_topic_and_context(agent: ReadAgent) -> dict:
     except json.JSONDecodeError as e:
         raise ValueError(f"Failed to parse JSON response: {e}, response: {response}")
     
-    print("Response Dict:",response_dict)
     return response_dict
 
 def check_URL(url, collection_name):
@@ -145,19 +146,18 @@ def check_URL(url, collection_name):
         where={"metadata.source": url}
     )
 
-    print(results)
     # Check if any document matches the query
     if len(results["documents"]) > 0:
         return True
     return False
 
 API_KEYS = [
-    'jina_1732664b08a34983b49d52051d6c71b9V2ra2V59ec8vVL2Vz32bnFh2T4Kp',
-    'jina_508b6dfd03dd4761b8270ec514b769b5Py9dFogV6lP5XvWMw9FGc3MkxkAs',
-    'jina_f88228a368d4411bab039dff868c4f06vauKVTkQfkb-JcpacBYap9ZluF4m',
-    'jina_a6a334ac556641d3b42504bcf0c35d140JKE7nGS-K8kKMtNMId0whJHHpqk',
-    'jina_69cc95f3f6ef4ef7b19b9a1bf26e82feuN3uaw9yf0vWNddiLl4H6wBfSRZp',
-    'jina_1c0850e3d3ed429292b4711168091d3b0o9b-nWoGwacNpKpKrLxJvzzxqZw'
+    'jina_edcbaa791d64418794ee0553310044acJ7mMj4HRyAjp-l7ve6YImbbwF5jR',
+    'jina_40cdef3973364907bba7534f321c17769opd2p6eaYNNozdzh0Bb4PCnp8Zr',
+    'jina_ab4986284dd64610a8d25f729cf3257dDaPTaBpWQLTkJn8900hzM3C6wVCr',
+    'jina_5ebdaa0766ea4ecaad7a77f09d179d1eeFo5Z8IKc98gVbk_sHuzJVYXO6yU',
+    'jina_42a9fece4bbb43a5b5b80724d730b0f9tVdzzV5iJb9sFlDw12NxhYL0BdBc',
+    'jina_aa3b93fde8c74fa2bad4c5c6ea5f1db2qE0aH7Iw4nQEsmCwidtQrbvJnsmy'
 ]
 call_counter = 0
 
@@ -254,7 +254,6 @@ def get_data_discussion(agent: ReadAgent) -> ReadAgent:
                 #    continue
                 #else:
                 docs = split_text(responses[i], link)
-                #print("Docs_1:",docs)
                 a=0
                 for doc in docs:
                     for doc_dict in doc:
@@ -270,7 +269,6 @@ def get_data_discussion(agent: ReadAgent) -> ReadAgent:
                 #    continue
                 #else:
                 docs = split_text(responses[i], link)
-                #print("Docs_2:",docs)
                 a=0
                 for doc in docs:
                     for doc_dict in doc:
@@ -305,66 +303,52 @@ def retrieve_relevant_data(topic) -> dict:
     collection_2 = db.get_collection("Data_2")
     results_2 = collection_2.query(query_texts=[topic], n_results=6)  # Fetch all data or a large number
     data_cache["Data_2"] = [doc for doc in results_2['documents'][0]]
-    
-    print("Data_Cache:",data_cache)
 
     return data_cache
 
 
 class DialogueSimulator:
-    def __init__(
-        self,
-        agents: List[ReadAgent],
-        selection_function: Callable[[int, List[ReadAgent]], int],
-    ) -> None:
-        self.agents = agents
+    def __init__(self, agent: ReadAgent, selection_function: Callable[[int], str]) -> None:
+        self.agent = agent
         self._step = 0
         self.select_next_speaker = selection_function
 
     def reset(self):
-        for agent in self.agents:
-            agent.reset()
+        self.agent.reset()
         self._step = 0
 
     def inject(self, name: str, message: str):
         # Introduce the discussion with no step increment
-        for agent in self.agents:
-            agent.receive(name, message)
+        self.agent.receive(name, message)
         self._step += 1
-        #print(f"({name}): {message}\n")
 
-    def step(self, name) -> tuple[str, str]:
-        # 1. Choose the next speaker based on current step
-        speaker_idx = self.select_next_speaker(self._step, self.agents)
-        speaker = self.agents[speaker_idx]
+    def step(self) -> tuple[str, str]:
+        # Choose the next speaker based on current step
+        current_speaker = self.select_next_speaker(self._step, self.agent)
+
+        #print(f"Current speaker: {current_speaker}")
         
-        # 2. Next speaker sends message
-        message = speaker.send(name)
+        # Send message from the current speaker
+        message = self.agent.send(current_speaker)
 
-        # 3. Everyone receives the message
-        for receiver in self.agents:
-            sender = name
-            if self.agents[0].speaker_1 == name:
-                politician = "politician1"
-            else:
-                politician = "politician2"
-            receiver.receive(sender, message)
+        # Everyone receives the message
+        self.agent.receive(current_speaker, message)
 
-        success, result = update_debate_data(speaker.ID, politician, message)
+        # Update debate data
+        politician = "politician1" if current_speaker == self.agent.speaker_1 else "politician2"
+        success, result = update_debate_data(self.agent.ID, politician, message)
         if not success:
             print(f"Failed to update debate: {result}")
 
-        # 4. Increment the step only if the debate was updated successfully
-        #if success:
+        # Increment the step only if the debate was updated successfully
+        if success:
             self._step += 1
 
-        return sender, message
+        return current_speaker, message
 
-def select_next_speaker(step: int, agents: List[ReadAgent]) -> int:
-    # Ensure that step 0 corresponds to speaker 1 and the alternation logic
-    # step 0 -> speaker 1 (index 0)
-    # step 1 -> speaker 2 (index 1), and so on
-    return step % len(agents)
+def select_next_speaker(step: int, agent: ReadAgent) -> str:
+    # Alternate between speaker_1 and speaker_2
+    return agent.speaker_1 if step % 2 == 0 else agent.speaker_2
 
 def generate_system_message(name, agent_description, conversation_description, agent: ReadAgent) -> str:
     if name == agent.speaker_1:
@@ -399,7 +383,7 @@ def generate_system_message(name, agent_description, conversation_description, a
             6. DO NOT fabricate fake citations.
             7. DO NOT cite any source that you did not look up.
             8. DO NOT provide "Conclusions", or summaries of any kind at the end of your response.
-            9. Avoid repeating the same information, if you have already mentioned this argument in: <Conversation history>, do not bring it up again. If you can't find any more relevant information in <context_data> to support your arguments on the topic than those arleady said, inform your opponent that you don't have anything more to add on the subject.
+            9. Thoroughly analyze <Conversation history>, avoid repeating the same information, if you have already mentioned some argument, do not bring it up again. If you can't find any more relevant information to support your arguments on the topic than those arleady said, inform your opponent that you don't have anything more to add on the subject.
             
         </steps_to_execute_the_task>
         
@@ -449,41 +433,26 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
         )
     )
 
+    # Generate detailed descriptions and system messages for each speaker
     agent_descriptions = {
         name: generate_agent_description(name, conversation_description, agent=shared_agent) for name in names
     }
-    for name, description in agent_descriptions.items():
-        print(description)
-
+    
     agent_system_messages = {
         name: generate_system_message(name, agent_description, conversation_description=conversation_description, agent=shared_agent)
-        for name, agent_description in zip(names, agent_descriptions.values())
+        for name, agent_description in agent_descriptions.items()
     }
 
-    # Use the shared data cache to create agents
-    message=list(agent_system_messages.values())[0]
-    agents = [
-        ReadAgent(
-            ID=ID,
-            prompt=prompt,
-            speaker_1=speaker_1,
-            speaker_2=speaker_2,
-            context=shared_agent.context,
-            topic=shared_agent.topic,
-            initiate=shared_agent.initiate,
-            system_message=message,
-            model=ChatOpenAI(model="gpt-4o-mini", temperature=0.2),
-            message_history=[],
-            data_cache=shared_agent.data_cache
-        )
-        for name, message in zip(names, agent_system_messages.values())
-    ]
+    # Use the shared agent and dynamically set system messages during each step
+    def select_next_speaker(step: int, agent: ReadAgent) -> str:
+        # Alternate between speaker_1 and speaker_2
+        return agent.speaker_1 if step % 2 == 0 else agent.speaker_2
 
-    simulator = DialogueSimulator(agents=agents, selection_function=select_next_speaker)
-    simulator.inject("Moderator", agents[0].initiate)
+    simulator = DialogueSimulator(agent=shared_agent, selection_function=select_next_speaker)
+    simulator.inject("Moderator", shared_agent.initiate)
 
     message_history = []
-    
+
     def add_message(sender: str, content: str):
         message = {
             "politician": sender,
@@ -491,24 +460,17 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
         }
         message_history.append(message)
 
-    add_message("Moderator", f"{agents[0].initiate}")
-    
+    add_message("Moderator", f"{shared_agent.initiate}")
+
     # Simulate conversation
-    counter=1
-    while counter<=6:
-        if counter%2==0:
-            name=agents[0].speaker_2
-        else:
-            name=agents[0].speaker_1
-        sender, message = simulator.step(name)
-        if name.split()[0] in message:
-            if name==agents[0].speaker_1:
-                add_message(agents[0].speaker_2, message)
-            else:
-                add_message(agents[0].speaker_1, message)
-        else:
-                add_message(sender, message)
-        counter+=1
+    for _ in range(6):
+        current_speaker = select_next_speaker(simulator._step, shared_agent)
+        
+        # Dynamically set the system message based on the current speaker
+        shared_agent.system_message = SystemMessage(content=agent_system_messages[current_speaker])
+        
+        sender, message = simulator.step()
+        add_message(sender, message)
     
     def display_history():
         for message in message_history:
@@ -517,7 +479,7 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
     print("----------------------Chat History-----------------------------------")
     display_history()
 
-############################RAG#############################
+############################RAG################################
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
