@@ -68,7 +68,7 @@ def update_debate_data(debate_id, speaker, message):
             }
         }
         
-        #print("Payload:",payload)
+        print("Payload:",payload)
         
         # Make POST request to Convex update function
         response = requests.post(UPDATE_DEBATE_ENDPOINT, json=payload)
@@ -320,7 +320,7 @@ class DialogueSimulator:
     def inject(self, name: str, message: str):
         # Introduce the discussion with no step increment
         self.agent.receive(name, message)
-        self._step += 1
+        #self._step += 1
 
     def step(self) -> tuple[str, str]:
         # Choose the next speaker based on current step
@@ -371,6 +371,7 @@ def generate_system_message(name, agent_description, conversation_description, a
         </goal_of_the_task>
 
         <steps to execute the task>
+            You are given 50 points at the start.
 
             1. Your name is {name}. Speak from the first person perspective as {name}.
 
@@ -383,7 +384,8 @@ def generate_system_message(name, agent_description, conversation_description, a
             6. DO NOT fabricate fake citations.
             7. DO NOT cite any source that you did not look up.
             8. DO NOT provide "Conclusions", or summaries of any kind at the end of your response.
-            9. Thoroughly analyze <Conversation history>, avoid repeating the same information, if you have already mentioned some argument, do not bring it up again. If you can't find any more relevant information to support your arguments on the topic than those arleady said, inform your opponent that you don't have anything more to add on the subject.
+            9. Thoroughly analyze <Conversation history>. Avoid repeating the same information. If you can't find any more relevant information to support your arguments on the topic than those arleady said, inform your opponent that you don't have anything more to add on the subject.
+            10. For every reapeated argument you get -5 points from the poll, if you lose all your points your lose the debate, so be very careful when choosing arguments to not repeat the same information arleady in <Conversation history>.
             
         </steps_to_execute_the_task>
         
@@ -477,7 +479,7 @@ def start_debate(ID, prompt, speaker_1, speaker_2):
             print(f"{message['politician']}: {message['message']} \n")
             
     print("----------------------Chat History-----------------------------------")
-    display_history()
+    #display_history()
 
 ############################RAG################################
 
